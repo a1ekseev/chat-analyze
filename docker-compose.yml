@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:18.6-alpine3.24
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chat}
+      POSTGRES_DB: ${POSTGRES_DB:-chat}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # migrate, app and login share one image; `just up` passes VERSION/COMMIT.
+  migrate:
+    image: chat-analyze:local
+    build: &build
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-none}
+    command: ["migrate", "up"]
+    restart: "no"
+    healthcheck:
+      disable: true
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://chat:chat@postgres:5432/chat?sslmode=disable}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app:
+    # Built once by migrate (app depends on it); never pulled from a registry.
+    image: chat-analyze:local
+    pull_policy: never
+    env_file: .env
+    # More than SHUTDOWN_TIMEOUT (30s by default): SIGKILL must not come first.
+    stop_grace_period: 40s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+
+  login:
+    image: chat-analyze:local
+    build: *build # same image; lets `just login` run before the first `just up`
+    profiles: ["tools"]
+    command: ["login"]
+    env_file: .env
+    healthcheck:
+      disable: true
+    stdin_open: true
+    tty: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
