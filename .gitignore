@@ -1,0 +1,4 @@
+*.session
+.env
+/bin/
+coverage.out

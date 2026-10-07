@@ -1,0 +1,116 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard          # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - contextcheck
+    - copyloopvar
+    - errname
+    - errorlint
+    - exhaustive
+    - fatcontext
+    - forbidigo
+    - gocritic
+    - gosec
+    - intrange
+    - misspell
+    - modernize
+    - nilerr
+    - noctx
+    - nolintlint
+    - perfsprint
+    - revive
+    - rowserrcheck
+    - sloglint
+    - sqlclosecheck
+    - testifylint
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - usetesting
+    - wrapcheck
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+        - shadow
+    errcheck:
+      check-type-assertions: true
+    exhaustive:
+      default-signifies-exhaustive: true
+    forbidigo:
+      forbid:
+        - pattern: ^fmt\.Print.*$
+          msg: use slog, not fmt.Print*
+        - pattern: ^log\.(Print|Fatal|Panic).*$
+          msg: use slog, not the log package
+        - pattern: ^slog\.Any$
+          msg: slog.Any may leak sensitive values; use typed attrs
+    gocritic:
+      enabled-tags: [diagnostic, performance, style]
+      disabled-checks: [hugeParam, unnamedResult, whyNoLint]
+    gosec:
+      excludes: [G104]   # dup of errcheck
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+    sloglint:
+      no-mixed-args: true
+      kv-only: false
+      attr-only: false
+      context: scope
+      static-msg: true
+      key-naming-case: snake
+    wrapcheck:
+      ignore-sig-regexps:
+        - \.Errorf\(
+        - errors\.New\(
+        - errors\.Join\(
+        - \.Wrap\(
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+    rules:
+      - path: _test\.go
+        linters: [gosec, wrapcheck, errcheck, unparam, noctx]
+      - path: (_test\.go|^internal/logx/)
+        linters: [forbidigo]
+        text: slog\.Any
+      - path: ^cmd/
+        linters: [forbidigo]
+        text: fmt\.Fprint
+      - path: (^|/)mocks?/
+        linters: [all]
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      extra:
+        group-params: true
+    goimports:
+      local-prefixes:
+        - github.com/a1ekseev/chat-analyze
+  exclusions:
+    generated: lax
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
