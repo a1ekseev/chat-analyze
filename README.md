@@ -111,7 +111,7 @@ JSON в stdout (`LOG_FORMAT=text` для чтения глазами), ключ�
 
 ## Разработка и тесты
 
-Нужен Go 1.27.1 (`toolchain` в `go.mod` подтянется сам), `just`, Docker.
+Нужен Go 1.27.3 (`toolchain` в `go.mod` подтянется сам), `just`, Docker.
 
 ```sh
 just lint               # golangci-lint (с тегом integration, как в CI)
