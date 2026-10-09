@@ -1,4 +1,4 @@
-FROM golang:1.27.3-bookworm AS test
+FROM mirror.gcr.io/library/golang:1.27.3-bookworm AS test
 # Debian image: gcc is preinstalled, which -race (cgo) needs.
 WORKDIR /src
 ENV CGO_ENABLED=1
@@ -7,7 +7,7 @@ RUN go mod download
 COPY . .
 CMD ["go", "test", "-tags=integration", "-race", "-count=1", "./..."]
 
-FROM golang:1.27.3-alpine3.24 AS build
+FROM mirror.gcr.io/library/golang:1.27.3-alpine3.24 AS build
 WORKDIR /src
 ARG VERSION=dev
 ARG COMMIT=none

@@ -121,6 +121,8 @@ just vuln               # govulncheck
 just ci                 # всё вместе
 ```
 
+Базовые образы (golang, postgres) берутся из `mirror.gcr.io` (зеркало Docker Hub от Google), чтобы не упираться в лимиты Docker Hub на pull.
+
 Интеграционные тесты (build tag `integration`) идут против настоящего PostgreSQL и запускаются в compose:
 `just test-integration` поднимает временный postgres на tmpfs (`docker-compose.test.yml`) и прогоняет
 `go test -tags=integration -race ./...`.
