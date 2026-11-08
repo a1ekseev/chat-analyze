@@ -15,6 +15,11 @@ type API interface {
 	ChannelsReadHistory(ctx context.Context, req *tg.ChannelsReadHistoryRequest) (bool, error)
 	MessagesReadDiscussion(ctx context.Context, req *tg.MessagesReadDiscussionRequest) (bool, error)
 	MessagesGetHistory(ctx context.Context, req *tg.MessagesGetHistoryRequest) (tg.MessagesMessagesClass, error)
+	MessagesGetDialogs(ctx context.Context, req *tg.MessagesGetDialogsRequest) (tg.MessagesDialogsClass, error)
+	MessagesGetForumTopics(ctx context.Context, req *tg.MessagesGetForumTopicsRequest) (*tg.MessagesForumTopics, error)
+	MessagesMarkDialogUnread(ctx context.Context, req *tg.MessagesMarkDialogUnreadRequest) (bool, error)
+	MessagesReadMentions(ctx context.Context, req *tg.MessagesReadMentionsRequest) (*tg.MessagesAffectedHistory, error)
+	MessagesReadReactions(ctx context.Context, req *tg.MessagesReadReactionsRequest) (*tg.MessagesAffectedHistory, error)
 }
 
 var _ API = (*tg.Client)(nil)

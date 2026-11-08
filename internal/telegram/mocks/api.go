@@ -56,6 +56,36 @@ func (mr *MockAPIMockRecorder) ChannelsReadHistory(ctx, req any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ChannelsReadHistory", reflect.TypeOf((*MockAPI)(nil).ChannelsReadHistory), ctx, req)
 }
 
+// MessagesGetDialogs mocks base method.
+func (m *MockAPI) MessagesGetDialogs(ctx context.Context, req *tg.MessagesGetDialogsRequest) (tg.MessagesDialogsClass, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MessagesGetDialogs", ctx, req)
+	ret0, _ := ret[0].(tg.MessagesDialogsClass)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// MessagesGetDialogs indicates an expected call of MessagesGetDialogs.
+func (mr *MockAPIMockRecorder) MessagesGetDialogs(ctx, req any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MessagesGetDialogs", reflect.TypeOf((*MockAPI)(nil).MessagesGetDialogs), ctx, req)
+}
+
+// MessagesGetForumTopics mocks base method.
+func (m *MockAPI) MessagesGetForumTopics(ctx context.Context, req *tg.MessagesGetForumTopicsRequest) (*tg.MessagesForumTopics, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MessagesGetForumTopics", ctx, req)
+	ret0, _ := ret[0].(*tg.MessagesForumTopics)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// MessagesGetForumTopics indicates an expected call of MessagesGetForumTopics.
+func (mr *MockAPIMockRecorder) MessagesGetForumTopics(ctx, req any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MessagesGetForumTopics", reflect.TypeOf((*MockAPI)(nil).MessagesGetForumTopics), ctx, req)
+}
+
 // MessagesGetHistory mocks base method.
 func (m *MockAPI) MessagesGetHistory(ctx context.Context, req *tg.MessagesGetHistoryRequest) (tg.MessagesMessagesClass, error) {
 	m.ctrl.T.Helper()
@@ -69,6 +99,21 @@ func (m *MockAPI) MessagesGetHistory(ctx context.Context, req *tg.MessagesGetHis
 func (mr *MockAPIMockRecorder) MessagesGetHistory(ctx, req any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MessagesGetHistory", reflect.TypeOf((*MockAPI)(nil).MessagesGetHistory), ctx, req)
+}
+
+// MessagesMarkDialogUnread mocks base method.
+func (m *MockAPI) MessagesMarkDialogUnread(ctx context.Context, req *tg.MessagesMarkDialogUnreadRequest) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MessagesMarkDialogUnread", ctx, req)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// MessagesMarkDialogUnread indicates an expected call of MessagesMarkDialogUnread.
+func (mr *MockAPIMockRecorder) MessagesMarkDialogUnread(ctx, req any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MessagesMarkDialogUnread", reflect.TypeOf((*MockAPI)(nil).MessagesMarkDialogUnread), ctx, req)
 }
 
 // MessagesReadDiscussion mocks base method.
@@ -99,4 +144,34 @@ func (m *MockAPI) MessagesReadHistory(ctx context.Context, req *tg.MessagesReadH
 func (mr *MockAPIMockRecorder) MessagesReadHistory(ctx, req any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MessagesReadHistory", reflect.TypeOf((*MockAPI)(nil).MessagesReadHistory), ctx, req)
+}
+
+// MessagesReadMentions mocks base method.
+func (m *MockAPI) MessagesReadMentions(ctx context.Context, req *tg.MessagesReadMentionsRequest) (*tg.MessagesAffectedHistory, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MessagesReadMentions", ctx, req)
+	ret0, _ := ret[0].(*tg.MessagesAffectedHistory)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// MessagesReadMentions indicates an expected call of MessagesReadMentions.
+func (mr *MockAPIMockRecorder) MessagesReadMentions(ctx, req any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MessagesReadMentions", reflect.TypeOf((*MockAPI)(nil).MessagesReadMentions), ctx, req)
+}
+
+// MessagesReadReactions mocks base method.
+func (m *MockAPI) MessagesReadReactions(ctx context.Context, req *tg.MessagesReadReactionsRequest) (*tg.MessagesAffectedHistory, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MessagesReadReactions", ctx, req)
+	ret0, _ := ret[0].(*tg.MessagesAffectedHistory)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// MessagesReadReactions indicates an expected call of MessagesReadReactions.
+func (mr *MockAPIMockRecorder) MessagesReadReactions(ctx, req any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MessagesReadReactions", reflect.TypeOf((*MockAPI)(nil).MessagesReadReactions), ctx, req)
 }
