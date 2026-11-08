@@ -52,6 +52,7 @@ type env struct {
 	d    tg.UpdateDispatcher
 	w    *worker.Worker
 	bw   *worker.LongWorker
+	sw   *worker.LongWorker
 	l    *telegram.Listener
 	r    *telegram.Reader
 	buf  *bytes.Buffer
@@ -84,6 +85,7 @@ func newEnv(t *testing.T, wrap func(worker.MessageStore, *pgxpool.Pool) worker.M
 	e.r = reader
 	e.w = worker.New(q, store, reader, wcfg, logger)
 	e.bw = worker.NewBackfill(q, listener, wcfg, logger)
+	e.sw = worker.NewSync(q, telegram.NewDialogSync(listener, reader, true), wcfg, logger)
 	return e
 }
 
@@ -522,3 +524,101 @@ func TestE2E_BackfillShutdownReleasesJob(t *testing.T) {
 	require.Equal(t, 0, e.count(t, `SELECT count(*) FROM jobs WHERE kind = 'save_message' AND status = 'pending'`))
 }
 
+func dialogsOf(ds ...*tg.Dialog) *tg.MessagesDialogs {
+	r := &tg.MessagesDialogs{
+		Chats: []tg.ChatClass{forumChannel("Forum")},
+		Users: []tg.UserClass{&tg.User{ID: peerUserID, AccessHash: userHash, FirstName: "Bob"}},
+	}
+	for _, d := range ds {
+		r.Dialogs = append(r.Dialogs, d)
+	}
+	return r
+}
+
+func (e *env) expectDialogs(main *tg.MessagesDialogs) {
+	e.api.EXPECT().MessagesGetDialogs(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, r *tg.MessagesGetDialogsRequest) (tg.MessagesDialogsClass, error) {
+			if r.FolderID == 1 {
+				return &tg.MessagesDialogs{}, nil
+			}
+			return main, nil
+		}).Times(2)
+}
+
+// The dialog sync job goes through the PG queue: a forum behind the stored
+// history and a private chat with no history but unread messages get
+// backfill_history jobs; their messages are saved and marked read (chat and
+// topic). A second pass over the synced state enqueues and marks nothing.
+func TestE2E_DialogSync(t *testing.T) {
+	e := newEnv(t, nil)
+	chats := []tg.ChatClass{forumChannel("Forum")}
+	e.api.EXPECT().ChannelsReadHistory(gomock.Any(), gomock.Any()).Return(true, nil).Times(1) // live message 10
+	e.api.EXPECT().MessagesReadDiscussion(gomock.Any(), gomock.Any()).Return(true, nil).Times(1)
+	e.deliver(t, newChannelMsg(topicMsg(10, "stored")), senderUser("Ann"), chats)
+	e.drain(t)
+
+	// Downtime: the forum got 11 and 12 in topic 200, Bob wrote 7 (6 was read).
+	e.expectDialogs(dialogsOf(
+		&tg.Dialog{Peer: &tg.PeerChannel{ChannelID: channelRaw}, TopMessage: 12, ReadInboxMaxID: 10, UnreadCount: 2},
+		&tg.Dialog{Peer: &tg.PeerUser{UserID: peerUserID}, TopMessage: 7, ReadInboxMaxID: 6, UnreadCount: 1},
+	))
+	e.api.EXPECT().MessagesGetForumTopics(gomock.Any(), gomock.Any()).Return(&tg.MessagesForumTopics{
+		Topics: []tg.ForumTopicClass{&tg.ForumTopic{ID: 200, TopMessage: 12, ReadInboxMaxID: 10, UnreadCount: 2}},
+	}, nil)
+	_, err := e.q.EnqueueIdle(e.ctx, jobs.KindSyncDialogs, jobs.SyncDialogsDedupKey, struct{}{})
+	require.NoError(t, err)
+	did, err := e.sw.RunOnce(e.ctx)
+	require.NoError(t, err)
+	require.True(t, did)
+	require.Equal(t, 1, e.count(t, `SELECT count(*) FROM jobs WHERE kind = 'sync_dialogs' AND status = 'done'`))
+	_, p, _ := e.backfillJob(t)
+	require.Equal(t, jobs.BackfillHistory{ChatID: channelMark, MinID: 10}, p)
+	require.Equal(t, 1, e.count(t, `SELECT count(*) FROM jobs WHERE kind = 'backfill_history' AND dedup_key = $1
+		AND payload = '{"chat_id": 2000, "min_id": 6, "max_pages": 1}'::jsonb`, jobs.BackfillDedupKey(peerUserID)))
+
+	e.api.EXPECT().MessagesGetHistory(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, r *tg.MessagesGetHistoryRequest) (tg.MessagesMessagesClass, error) {
+			if _, ok := r.Peer.(*tg.InputPeerUser); ok {
+				require.Equal(t, &tg.InputPeerUser{UserID: peerUserID, AccessHash: userHash}, r.Peer)
+				require.Equal(t, 6, r.MinID)
+				return &tg.MessagesMessages{Messages: []tg.MessageClass{&tg.Message{
+					ID: 7, Date: int(time.Now().Unix()), Message: "hi", PeerID: &tg.PeerUser{UserID: peerUserID},
+				}}}, nil
+			}
+			require.Equal(t, 10, r.MinID)
+			if r.OffsetID == 0 {
+				return channelHistory(12, 11), nil
+			}
+			return channelHistory(), nil
+		}).Times(3)
+	for range 2 {
+		did, err := e.bw.RunOnce(e.ctx)
+		require.NoError(t, err)
+		require.True(t, did)
+	}
+	e.api.EXPECT().ChannelsReadHistory(gomock.Any(), &tg.ChannelsReadHistoryRequest{
+		Channel: &tg.InputChannel{ChannelID: channelRaw, AccessHash: chanHash}, MaxID: 12,
+	}).Return(true, nil).Times(1)
+	e.api.EXPECT().MessagesReadDiscussion(gomock.Any(), &tg.MessagesReadDiscussionRequest{
+		Peer: &tg.InputPeerChannel{ChannelID: channelRaw, AccessHash: chanHash}, MsgID: 200, ReadMaxID: 12,
+	}).Return(true, nil).Times(1)
+	e.api.EXPECT().MessagesReadHistory(gomock.Any(), &tg.MessagesReadHistoryRequest{
+		Peer: &tg.InputPeerUser{UserID: peerUserID, AccessHash: userHash}, MaxID: 7,
+	}).Return(&tg.MessagesAffectedMessages{}, nil).Times(1)
+	e.drain(t)
+	require.Equal(t, 3, e.count(t, `SELECT count(*) FROM messages WHERE (chat_id = $1 AND message_id IN (10, 11, 12) AND topic_id = 200)`, channelMark))
+	require.Equal(t, 1, e.count(t, `SELECT count(*) FROM messages WHERE chat_id = $1 AND message_id = 7`, peerUserID))
+
+	// Synced: the next pass costs the getDialogs pages only.
+	e.expectDialogs(dialogsOf(
+		&tg.Dialog{Peer: &tg.PeerChannel{ChannelID: channelRaw}, TopMessage: 12, ReadInboxMaxID: 12},
+		&tg.Dialog{Peer: &tg.PeerUser{UserID: peerUserID}, TopMessage: 7, ReadInboxMaxID: 7},
+	))
+	_, err = e.q.EnqueueIdle(e.ctx, jobs.KindSyncDialogs, jobs.SyncDialogsDedupKey, struct{}{})
+	require.NoError(t, err)
+	did, err = e.sw.RunOnce(e.ctx)
+	require.NoError(t, err)
+	require.True(t, did)
+	require.Equal(t, 0, e.count(t, `SELECT count(*) FROM jobs WHERE status = 'pending'`))
+	require.Contains(t, e.buf.String(), `"chats_behind":0`)
+}

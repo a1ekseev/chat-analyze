@@ -22,7 +22,7 @@ import (
 const (
 	readHeaderTimeout = 10 * time.Second
 	// poolHeadroom is added to WORKERS for the minimum pool size (F12).
-	poolHeadroom = 4
+	poolHeadroom = 5
 )
 
 // Run connects to the database, applies migrations and runs the Telegram
@@ -32,8 +32,8 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	log := logger.With(logx.Component("app"))
 
 	// Every worker holds a connection while it works; the queue notifier
-	// holds one for good; the backfill worker, maintenance, Telegram state
-	// and the health check need the rest.
+	// holds one for good; the backfill and dialog sync workers, maintenance,
+	// Telegram state and the health check need the rest.
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL.Reveal(), db.WithMaxConnsAtLeast(cfg.Workers+poolHeadroom))
 	if err != nil {
 		return fmt.Errorf("connect database: %w", err)
@@ -114,9 +114,17 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		w := worker.New(q, repo, reader, wcfg, logger)
 		s.Background = append(s.Background, func(ctx context.Context) error { return w.Run(ctx, notifier.C()) })
 	}
-	// One backfill_channel worker (ChannelTooLong gaps); it stops with the
-	// other workers, before Telegram.
+	// One backfill_history worker (ChannelTooLong gaps, chats behind found
+	// by the dialog sync); it stops with the other workers, before Telegram.
 	s.Background = append(s.Background, worker.NewBackfill(q, listener, wcfg, logger).Run)
+	if cfg.SyncInterval > 0 {
+		// Dialog sync: the first pass right after login, then every
+		// SYNC_INTERVAL, as a deduplicated sync_dialogs job.
+		dsync := telegram.NewDialogSync(listener, reader, cfg.MarkRead)
+		s.Background = append(s.Background,
+			worker.NewSync(q, dsync, wcfg, logger).Run,
+			func(ctx context.Context) error { return RunDialogSync(ctx, q, cfg.SyncInterval, client.Ready, logger) })
+	}
 
 	err = runStages(ctx, s, cfg.ShutdownTimeout, log)
 	if errors.Is(err, ErrShutdownTimeout) {

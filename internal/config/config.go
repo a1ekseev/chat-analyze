@@ -23,6 +23,7 @@ const (
 	minJobsLease        = time.Second
 	minJobsPollInterval = 100 * time.Millisecond
 	minShutdownTimeout  = time.Second
+	minSyncInterval     = time.Minute
 )
 
 // Config is the process configuration (spec §9).
@@ -45,8 +46,10 @@ type Config struct {
 	// text) are kept for inspection before maintenance deletes them.
 	JobsDeadRetention time.Duration `env:"JOBS_DEAD_RETENTION" envDefault:"720h"`
 
-	MarkRead bool   `env:"MARK_READ" envDefault:"true"`
-	HTTPAddr string `env:"HTTP_ADDR" envDefault:":8080"`
+	MarkRead bool `env:"MARK_READ" envDefault:"true"`
+	// SyncInterval is the period of the dialog sync pass; 0 disables it.
+	SyncInterval time.Duration `env:"SYNC_INTERVAL" envDefault:"15m"`
+	HTTPAddr     string        `env:"HTTP_ADDR" envDefault:":8080"`
 
 	LogLevel        string        `env:"LOG_LEVEL" envDefault:"info" validate:"oneof=debug info warn error"`
 	LogFormat       string        `env:"LOG_FORMAT" envDefault:"json" validate:"oneof=json text"`
@@ -86,6 +89,9 @@ func LoadFrom(environ map[string]string) (Config, error) {
 	if cfg.ShutdownTimeout < minShutdownTimeout {
 		bad = append(bad, "SHUTDOWN_TIMEOUT")
 	}
+	if cfg.SyncInterval != 0 && cfg.SyncInterval < minSyncInterval {
+		bad = append(bad, "SYNC_INTERVAL")
+	}
 	if !validDatabaseURL(cfg.DatabaseURL.Reveal()) {
 		bad = append(bad, "DATABASE_URL")
 	}
@@ -119,6 +125,7 @@ func (c Config) LogValue() slog.Value {
 		slog.Duration("jobs_retention", c.JobsRetention),
 		slog.Duration("jobs_dead_retention", c.JobsDeadRetention),
 		slog.Bool("mark_read", c.MarkRead),
+		slog.Duration("sync_interval", c.SyncInterval),
 		slog.String("http_addr", c.HTTPAddr),
 		slog.String("log_level", c.LogLevel),
 		slog.String("log_format", c.LogFormat),

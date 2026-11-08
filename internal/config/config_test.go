@@ -37,6 +37,7 @@ func TestLoad_Defaults(t *testing.T) {
 	require.Equal(t, 168*time.Hour, cfg.JobsRetention)
 	require.Equal(t, 720*time.Hour, cfg.JobsDeadRetention)
 	require.True(t, cfg.MarkRead)
+	require.Equal(t, 15*time.Minute, cfg.SyncInterval)
 	require.Equal(t, "default", cfg.SessionName)
 	require.Equal(t, ":8080", cfg.HTTPAddr)
 	require.Equal(t, "info", cfg.LogLevel)
@@ -71,6 +72,8 @@ func TestLoad_Invalid(t *testing.T) {
 		{"shutdown timeout zero", func(e map[string]string) { e["SHUTDOWN_TIMEOUT"] = "0s" }, "SHUTDOWN_TIMEOUT"},
 		{"shutdown timeout negative", func(e map[string]string) { e["SHUTDOWN_TIMEOUT"] = "-5s" }, "SHUTDOWN_TIMEOUT"},
 		{"shutdown timeout too small", func(e map[string]string) { e["SHUTDOWN_TIMEOUT"] = "500ms" }, "SHUTDOWN_TIMEOUT"},
+		{"sync interval negative", func(e map[string]string) { e["SYNC_INTERVAL"] = "-1m" }, "SYNC_INTERVAL"},
+		{"sync interval too small", func(e map[string]string) { e["SYNC_INTERVAL"] = "30s" }, "SYNC_INTERVAL"},
 		{"dead retention zero", func(e map[string]string) { e["JOBS_DEAD_RETENTION"] = "0s" }, "JOBS_DEAD_RETENTION"},
 		{"max attempts zero", func(e map[string]string) { e["JOBS_MAX_ATTEMPTS"] = "0" }, "JOBS_MAX_ATTEMPTS"},
 		{"unparsable workers", func(e map[string]string) { e["WORKERS"] = "many" + testPass }, "WORKERS"},
@@ -191,4 +194,18 @@ func TestLoad_DeadRetention(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 48*time.Hour, cfg.JobsDeadRetention)
 	require.Contains(t, cfg.String(), "jobs_dead_retention=48h0m0s")
+}
+
+func TestLoad_SyncInterval(t *testing.T) {
+	env := validEnv()
+	env["SYNC_INTERVAL"] = "0"
+	cfg, err := LoadFrom(env)
+	require.NoError(t, err)
+	require.Zero(t, cfg.SyncInterval, "0 disables the dialog sync")
+
+	env["SYNC_INTERVAL"] = "1m"
+	cfg, err = LoadFrom(env)
+	require.NoError(t, err)
+	require.Equal(t, time.Minute, cfg.SyncInterval)
+	require.Contains(t, cfg.String(), "sync_interval=1m0s")
 }
