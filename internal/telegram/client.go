@@ -91,6 +91,10 @@ func NewClient(cfg ClientConfig) *Client {
 			log.WarnContext(context.Background(), "load channel state failed", logx.ChatID(channelChatID(channelID)))
 		},
 		Logger: gotdLogger,
+		// Bounds the getChannelDifference burst at startup and reconnect
+		// (one per stored channel); 3 keeps gap recovery reasonably fast
+		// while leaving RateLimiter slots for the workers.
+		MaxChannelDifferenceConcurrency: 3,
 	})
 
 	c.session = NewSessionStorage(cfg.Pool, cfg.SessionName)
