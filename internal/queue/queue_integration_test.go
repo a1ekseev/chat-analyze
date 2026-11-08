@@ -630,3 +630,34 @@ func TestCleanup_DeadJobsAfterDeadRetention(t *testing.T) {
 	require.NoError(t, rows.Err())
 	require.Equal(t, []string{"fresh-dead", "old-pending"}, left)
 }
+
+// EnqueueIdle never touches a pending or running job and re-arms a done one.
+func TestEnqueueIdle(t *testing.T) {
+	ctx := context.Background()
+	pool := pgtest.New(t)
+	q := queue.New(pool, 5)
+
+	r1, err := q.EnqueueIdle(ctx, "sync", "all", struct{}{})
+	require.NoError(t, err)
+	require.True(t, r1.Inserted)
+
+	r, err := q.EnqueueIdle(ctx, "sync", "all", struct{}{})
+	require.NoError(t, err)
+	require.Equal(t, queue.EnqueueResult{}, r, "pending: left alone")
+
+	job, ok, err := q.Claim(ctx, "sync", time.Minute)
+	require.NoError(t, err)
+	require.True(t, ok)
+	r, err = q.EnqueueIdle(ctx, "sync", "all", struct{}{})
+	require.NoError(t, err)
+	require.Equal(t, queue.EnqueueResult{}, r, "running: left alone")
+	done, err := q.Complete(ctx, job.ID, job.Version)
+	require.NoError(t, err)
+	require.True(t, done, "the running job was not superseded")
+
+	r, err = q.EnqueueIdle(ctx, "sync", "all", struct{}{})
+	require.NoError(t, err)
+	require.Equal(t, r1.ID, r.ID)
+	require.Equal(t, 2, r.Version)
+	require.Equal(t, "pending", getRow(t, pool, r1.ID).Status)
+}

@@ -93,6 +93,21 @@ func (q *Queue) EnqueueKeepMin(ctx context.Context, kind, dedupKey string, paylo
 	return q.enqueue(ctx, enqueueKeepMinSQL, kind, dedupKey, payload, field)
 }
 
+const enqueueIdleSQL = `
+INSERT INTO jobs (kind, dedup_key, payload, max_attempts) VALUES ($1, $2, $3, $4)
+ON CONFLICT (kind, dedup_key) DO UPDATE SET
+  payload = EXCLUDED.payload, status = 'pending', attempts = 0, run_at = now(),
+  last_error = NULL, version = jobs.version + 1, updated_at = now()
+WHERE jobs.status IN ('done', 'dead')
+RETURNING id, version, (xmax = 0) AS inserted`
+
+// EnqueueIdle inserts the job (kind, dedupKey) or re-arms it only when it is
+// done or dead: a pending or running job is left alone (zero EnqueueResult),
+// so at most one is ever queued and a retry delay is not bypassed.
+func (q *Queue) EnqueueIdle(ctx context.Context, kind, dedupKey string, payload any) (EnqueueResult, error) {
+	return q.enqueue(ctx, enqueueIdleSQL, kind, dedupKey, payload)
+}
+
 func (q *Queue) enqueue(ctx context.Context, sql, kind, dedupKey string, payload any, extra ...any) (EnqueueResult, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -101,7 +116,11 @@ func (q *Queue) enqueue(ctx context.Context, sql, kind, dedupKey string, payload
 	args := append([]any{kind, dedupKey, raw, q.maxAttempts}, extra...)
 	var res EnqueueResult
 	err = pgx.BeginFunc(ctx, q.pool, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, sql, args...).Scan(&res.ID, &res.Version, &res.Inserted); err != nil {
+		err := tx.QueryRow(ctx, sql, args...).Scan(&res.ID, &res.Version, &res.Inserted)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // EnqueueIdle: the job is already pending or running
+		}
+		if err != nil {
 			return fmt.Errorf("insert: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, NotifyChannel, kind); err != nil {
