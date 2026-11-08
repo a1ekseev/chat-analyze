@@ -78,6 +78,7 @@ linters:
         - \.Errorf\(
         - errors\.New\(
         - errors\.Join\(
+        - tgerr\.New\(
         - \.Wrap\(
   exclusions:
     generated: lax
