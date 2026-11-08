@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -64,6 +65,8 @@ type Listener struct {
 	base  atomic.Pointer[context.Context]
 	sleep func(context.Context, time.Duration) error // FLOOD_WAIT wait and page pause in Backfill
 	pause time.Duration                              // between Backfill pages
+	// chat ids already warned about: no full access hash stored
+	noHash sync.Map
 }
 
 // NewListener returns a Listener.
@@ -190,6 +193,7 @@ func (l *Listener) handle(ctx context.Context, e tg.Entities, msg tg.MessageClas
 		return nil
 	}
 	m := payload.Message
+	l.fullAccessHash(ctx, self.ID, m.ChatID, &payload.Read)
 	l.log.DebugContext(ctx, "update received", slog.String("update_type", updType),
 		logx.ChatID(m.ChatID), logx.MsgID(m.MessageID), slog.String("chat_type", m.ChatType),
 		slog.Bool("is_edit", isEdit), slog.Bool("is_service", m.IsService))
@@ -201,6 +205,28 @@ func (l *Listener) handle(ctx context.Context, e tg.Entities, msg tg.MessageClas
 	}
 	l.jobEnqueued(ctx, jobs.KindSaveMessage, res)
 	return nil
+}
+
+// fullAccessHash replaces the min (or missing) access hash of a user/channel
+// read target with the full one stored for our account: update entities are
+// often min constructors, whose hash readHistory rejects. Without a stored
+// hash the target stays as is (Reader skips it) and this is warned once per chat.
+func (l *Listener) fullAccessHash(ctx context.Context, selfID, chatID int64, t *jobs.ReadTarget) {
+	if t.PeerKind != jobs.PeerUser && t.PeerKind != jobs.PeerChannel || !t.IsMin && t.AccessHash != 0 {
+		return
+	}
+	p, ok, err := l.peers.Get(ctx, selfID, chatID)
+	switch {
+	case err != nil:
+		l.log.ErrorContext(ctx, "get peer failed", logx.ChatID(chatID), slog.String("error", logx.SanitizeError(err)))
+	case ok && p.AccessHash != 0:
+		t.AccessHash, t.IsMin = p.AccessHash, false
+	default:
+		if _, warned := l.noHash.LoadOrStore(chatID, struct{}{}); !warned {
+			l.log.WarnContext(ctx, "mark read skipped", slog.String("reason", "no_full_access_hash"),
+				logx.ChatID(chatID), slog.Bool("is_min", t.IsMin))
+		}
+	}
 }
 
 func (l *Listener) jobEnqueued(ctx context.Context, kind string, res queue.EnqueueResult) {

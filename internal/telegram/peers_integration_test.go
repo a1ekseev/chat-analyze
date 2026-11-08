@@ -113,3 +113,19 @@ func TestPeerCache_AccessHashStored(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok)
 }
+
+// A hash stored by updates.Manager (no tg_peers row yet) is returned once a
+// min entity of the same channel is saved.
+func TestPeerCache_MinPeerGetsManagerStoredHash(t *testing.T) {
+	ctx := context.Background()
+	pool := pgtest.New(t)
+	require.NoError(t, telegram.NewStateStorage(pool).SetChannelAccessHash(ctx, selfID, 5, 88))
+	c := telegram.NewPeerCache(pool)
+	minCh := telegram.PeerInfo{ChatID: -1000000000005, Kind: jobs.PeerChannel, ID: 5, Name: "T", AccessHash: 66, IsMin: true}
+	require.NoError(t, c.Save(ctx, selfID, map[int64]telegram.PeerInfo{minCh.ChatID: minCh}))
+	got, ok, err := c.Get(ctx, selfID, minCh.ChatID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int64(88), got.AccessHash)
+	require.False(t, got.IsMin)
+}

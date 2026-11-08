@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -544,4 +545,39 @@ func TestListener_OnChannelTooLongPanicRecovered(t *testing.T) {
 	e.l.OnChannelTooLong(5)
 	assert.Contains(t, e.buf.String(), "panic recovered")
 	assert.NotContains(t, e.buf.String(), "sensitive-panic-value")
+}
+
+func TestListener_MinChannelUsesStoredAccessHash(t *testing.T) {
+	e := setup(t, nil)
+	e.p.hash = map[int64]telegram.PeerInfo{-1000000000005: {Kind: jobs.PeerChannel, AccessHash: 88}}
+	minCh := &tg.Channel{ID: 5, AccessHash: 66, Title: "T", Min: true, Megagroup: true}
+	upd := &tg.Updates{Chats: []tg.ChatClass{minCh}, Updates: []tg.UpdateClass{&tg.UpdateNewChannelMessage{Message: channelMsg(9)}}}
+	require.NoError(t, e.d.Handle(t.Context(), upd))
+	require.Len(t, e.q.pl, 1)
+	rd := e.q.pl[0].Read
+	assert.Equal(t, jobs.ReadTarget{PeerKind: jobs.PeerChannel, PeerID: 5, AccessHash: 88}, rd)
+
+	r, api, _ := newReader(t)
+	api.EXPECT().ChannelsReadHistory(gomock.Any(), &tg.ChannelsReadHistoryRequest{
+		Channel: &tg.InputChannel{ChannelID: 5, AccessHash: 88}, MaxID: 9,
+	}).Return(true, nil)
+	require.NoError(t, markNow(t.Context(), r, -1000000000005, rd, 9))
+}
+
+func TestListener_MinChannelWithoutStoredHashWarnsOnce(t *testing.T) {
+	e := setup(t, nil)
+	minCh := &tg.Channel{ID: 5, AccessHash: 66, Title: "T", Min: true}
+	upd := &tg.Updates{Chats: []tg.ChatClass{minCh}, Updates: []tg.UpdateClass{
+		&tg.UpdateNewChannelMessage{Message: channelMsg(9)},
+		&tg.UpdateNewChannelMessage{Message: channelMsg(10)},
+	}}
+	require.NoError(t, e.d.Handle(t.Context(), upd))
+	require.Len(t, e.q.pl, 2)
+	assert.True(t, e.q.pl[0].Read.IsMin)
+	assert.Equal(t, 1, strings.Count(e.buf.String(),
+		`level=WARN msg="mark read skipped" component=telegram reason=no_full_access_hash chat_id=-1000000000005`))
+
+	r, _, marks := newReader(t) // no API call expected
+	require.NoError(t, markNow(t.Context(), r, -1000000000005, e.q.pl[0].Read, 9))
+	assert.Empty(t, marks.m)
 }
