@@ -26,6 +26,10 @@ const (
 	// spends waiting in total; a longer wait goes back to the queue.
 	backfillFloodWaitCap = 30 * time.Minute
 
+	// backfillPagePause spaces history pages: 1000 pages take ~17 minutes
+	// plus RTT (worker.BackfillLease leaves room for that and the cap above).
+	backfillPagePause = time.Second
+
 	tooLongEnqueueTimeout = 10 * time.Second
 )
 
@@ -58,7 +62,8 @@ type Listener struct {
 	log   *slog.Logger
 	qlog  *slog.Logger // component=queue (job enqueued)
 	base  atomic.Pointer[context.Context]
-	sleep func(context.Context, time.Duration) error // FLOOD_WAIT wait in Backfill
+	sleep func(context.Context, time.Duration) error // FLOOD_WAIT wait and page pause in Backfill
+	pause time.Duration                              // between Backfill pages
 }
 
 // NewListener returns a Listener.
@@ -68,6 +73,7 @@ func NewListener(q Enqueuer, repo MessageRepo, peers PeerStore, api API, logger 
 		log:   logger.With(logx.Component("telegram")),
 		qlog:  logger.With(logx.Component("queue")),
 		sleep: sleepCtx,
+		pause: backfillPagePause,
 	}
 }
 
@@ -235,7 +241,8 @@ func (l *Listener) OnChannelTooLong(channelID int64) {
 }
 
 // Backfill fetches the channel messages newer than minID and enqueues them as
-// save_message jobs, oldest first, only after every page was fetched. It is
+// save_message jobs, oldest first, only after every page was fetched; pages
+// are backfillPagePause apart. It is
 // the handler of backfill_channel jobs: any error makes the queue retry the
 // whole job with the same minID. A FLOOD_WAIT_X is waited out in place (X+1s)
 // and the same page is fetched again, up to backfillFloodWaitCap of waiting
@@ -275,9 +282,14 @@ func (l *Listener) Backfill(ctx context.Context, channelID int64, minID int) err
 		truncated = true
 		waited    time.Duration
 	)
-	for range maxPages {
+	for page := range maxPages {
 		if err := ctx.Err(); err != nil {
 			return wrapf(err, "backfill %d", chatID)
+		}
+		if page > 0 && l.pause > 0 {
+			if err := l.sleep(ctx, l.pause); err != nil {
+				return wrapf(err, "backfill page pause %d", chatID)
+			}
 		}
 		res, err := l.fetchHistory(ctx, chatID, &tg.MessagesGetHistoryRequest{
 			Peer: input, OffsetID: offset, MinID: minID, Limit: backfillPageLimit,

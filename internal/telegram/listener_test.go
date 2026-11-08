@@ -146,6 +146,7 @@ func setup(t *testing.T, api telegram.API) env {
 	q, r, p := &enq{}, &repo{}, &fakePeers{}
 	buf := &lockedBuf{}
 	l := telegram.NewListener(q, r, p, api, slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	telegram.SetBackfillPagePause(l, 0) // TestListener_BackfillPagePause covers it
 	d := tg.NewUpdateDispatcher()
 	l.Register(&d)
 	return env{l, d, q, r, p, buf}
@@ -392,6 +393,23 @@ func fakeSleep(l *telegram.Listener) *[]time.Duration {
 		return ctx.Err()
 	})
 	return &got
+}
+
+// Pages are spaced by the pause; the first page is fetched at once.
+func TestListener_BackfillPagePause(t *testing.T) {
+	api := mocks.NewMockAPI(gomock.NewController(t))
+	e := setup(t, api)
+	withHash(e)
+	telegram.SetBackfillPagePause(e.l, time.Second)
+	sleeps := fakeSleep(e.l)
+	gomock.InOrder(
+		api.EXPECT().MessagesGetHistory(gomock.Any(), gomock.Any()).Return(page(seq(21, 120)...), nil),
+		api.EXPECT().MessagesGetHistory(gomock.Any(), gomock.Any()).Return(page(seq(11, 20)...), nil),
+		api.EXPECT().MessagesGetHistory(gomock.Any(), gomock.Any()).Return(page(), nil),
+	)
+	require.NoError(t, e.l.Backfill(t.Context(), 5, 10))
+	assert.Equal(t, []time.Duration{time.Second, time.Second}, *sleeps)
+	require.Len(t, e.q.order, 110)
 }
 
 // FLOOD_WAIT on page 2: wait in the job and retry that page only.

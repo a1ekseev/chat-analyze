@@ -14,10 +14,11 @@ import (
 	"github.com/a1ekseev/chat-analyze/internal/queue"
 )
 
-// BackfillLease is the minimum lease of a backfill_channel job: fetching up
-// to 1000 history pages, plus up to 30 minutes of in-job FLOOD_WAIT waiting
-// (telegram.Listener.Backfill), takes far longer than one save_message job.
-const BackfillLease = 45 * time.Minute
+// BackfillLease is the minimum lease of a backfill_channel job: up to 1000
+// history pages 1s apart (~17m plus RTT, ~25m at 0.5s RTT), plus up to 30
+// minutes of in-job FLOOD_WAIT waiting (telegram.Listener.Backfill), takes
+// far longer than one save_message job.
+const BackfillLease = 60 * time.Minute
 
 // Backfiller fetches a channel gap and enqueues its messages
 // (telegram.Listener.Backfill).
