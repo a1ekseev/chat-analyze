@@ -5,7 +5,7 @@ go 1.27
 toolchain go1.27.3
 
 require (
-	github.com/caarlos0/env/v11 v11.4.1
+	github.com/caarlos0/env/v11 v11.4.2
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/gotd/log v0.1.0
 	github.com/gotd/td v0.163.0
