@@ -40,6 +40,6 @@ migrate *args="up":
     docker compose run --rm migrate migrate {{args}}
 
 vuln:
-    go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+    go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
 ci: lint test vuln test-integration
