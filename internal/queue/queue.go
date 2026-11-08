@@ -199,10 +199,15 @@ func (q *Queue) Release(ctx context.Context, id int64, version int) (bool, error
 }
 
 const reapSQL = `
-UPDATE jobs SET status = 'pending', locked_until = NULL, updated_at = now()
+UPDATE jobs SET status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'pending' END,
+       last_error = CASE WHEN attempts >= max_attempts THEN 'lease expired' ELSE last_error END,
+       version = version + 1, locked_until = NULL, updated_at = now()
 WHERE status = 'running' AND locked_until < now()`
 
-// Reap returns running jobs whose lease expired to pending.
+// Reap returns running jobs whose lease expired to pending, or marks them
+// dead once attempts reach max_attempts (a job that crashes the process every
+// time). It bumps version so the worker that lost the lease can no longer
+// Complete, Fail or Release the job.
 func (q *Queue) Reap(ctx context.Context) (int64, error) {
 	tag, err := q.pool.Exec(ctx, reapSQL)
 	if err != nil {

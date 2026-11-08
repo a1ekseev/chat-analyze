@@ -282,6 +282,98 @@ func TestReap_ReturnsExpiredRunning(t *testing.T) {
 	require.True(t, ok)
 }
 
+// expireLease makes a running job's lease look expired without sleeping.
+func expireLease(t *testing.T, pool *pgxpool.Pool, id int64) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(),
+		`UPDATE jobs SET locked_until = now() - interval '1 second' WHERE id = $1`, id)
+	require.NoError(t, err)
+}
+
+func TestReap_BelowMaxAttemptsPendingAndVersionBumped(t *testing.T) {
+	ctx := context.Background()
+	pool := pgtest.New(t)
+	q := queue.New(pool, 2)
+	r, err := q.Enqueue(ctx, "k", "d", 1)
+	require.NoError(t, err)
+	job, ok, err := q.Claim(ctx, "k", time.Minute)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 1, job.Attempts)
+	expireLease(t, pool, job.ID)
+
+	n, err := q.Reap(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, n)
+	got := getRow(t, pool, r.ID)
+	require.Equal(t, "pending", got.Status)
+	require.Equal(t, 1, got.Attempts)
+	require.Equal(t, job.Version+1, got.Version)
+	require.Nil(t, got.LastError)
+}
+
+// A job that kills the process on every attempt must end up dead, not loop.
+func TestReap_MaxAttemptsGoesDead(t *testing.T) {
+	ctx := context.Background()
+	pool := pgtest.New(t)
+	q := queue.New(pool, 2)
+	r, err := q.Enqueue(ctx, "k", "d", 1)
+	require.NoError(t, err)
+	for attempt := 1; attempt <= 2; attempt++ {
+		job, ok, err := q.Claim(ctx, "k", time.Minute)
+		require.NoError(t, err)
+		require.True(t, ok, "attempt %d", attempt)
+		require.Equal(t, attempt, job.Attempts)
+		expireLease(t, pool, job.ID)
+		n, err := q.Reap(ctx)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, n)
+	}
+	got := getRow(t, pool, r.ID)
+	require.Equal(t, "dead", got.Status)
+	require.Equal(t, 2, got.Attempts)
+	require.NotNil(t, got.LastError)
+	require.Equal(t, "lease expired", *got.LastError)
+	_, ok, err := q.Claim(ctx, "k", time.Minute)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+// After a reap and a re-claim by another worker, the worker whose lease
+// expired must not be able to complete, fail or release the job.
+func TestReap_StaleWorkerCannotFinish(t *testing.T) {
+	ctx := context.Background()
+	pool := pgtest.New(t)
+	q := queue.New(pool, 5)
+	r, err := q.Enqueue(ctx, "k", "d", 1)
+	require.NoError(t, err)
+	stale, ok, err := q.Claim(ctx, "k", time.Minute)
+	require.NoError(t, err)
+	require.True(t, ok)
+	expireLease(t, pool, stale.ID)
+	_, err = q.Reap(ctx)
+	require.NoError(t, err)
+	fresh, ok, err := q.Claim(ctx, "k", time.Minute)
+	require.NoError(t, err)
+	require.True(t, ok)
+	before := getRow(t, pool, r.ID)
+
+	done, err := q.Complete(ctx, stale.ID, stale.Version)
+	require.NoError(t, err)
+	require.False(t, done)
+	dead, err := q.Fail(ctx, stale, 0, queue.ErrPermanent)
+	require.NoError(t, err)
+	require.False(t, dead)
+	ok, err = q.Release(ctx, stale.ID, stale.Version)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, before, getRow(t, pool, r.ID))
+
+	done, err = q.Complete(ctx, fresh.ID, fresh.Version)
+	require.NoError(t, err)
+	require.True(t, done)
+}
+
 func TestCleanup_DeletesOldDone(t *testing.T) {
 	ctx := context.Background()
 	pool := pgtest.New(t)
