@@ -33,7 +33,7 @@ type enq struct {
 	order   []int
 
 	bfKeys  []string
-	bf      []jobs.BackfillChannel
+	bf      []jobs.BackfillHistory
 	bfField string
 }
 
@@ -46,11 +46,11 @@ func (e *enq) EnqueueKeepMin(ctx context.Context, kind, key string, payload any,
 	if e.panicOn {
 		panic("sensitive-panic-value")
 	}
-	if kind != jobs.KindBackfillChannel {
+	if kind != jobs.KindBackfillHistory {
 		return queue.EnqueueResult{}, errors.New("bad kind")
 	}
 	e.bfKeys = append(e.bfKeys, key)
-	e.bf = append(e.bf, payload.(jobs.BackfillChannel))
+	e.bf = append(e.bf, payload.(jobs.BackfillHistory))
 	e.bfField = field
 	return queue.EnqueueResult{ID: 7, Version: 1, Inserted: true}, e.err
 }
@@ -280,7 +280,7 @@ func TestListener_BackfillPagesAscending(t *testing.T) {
 			}
 			return page(), nil
 		})
-	require.NoError(t, e.l.Backfill(t.Context(), 5, 10))
+	require.NoError(t, e.l.Backfill(t.Context(), -1000000000005, 10, 0))
 	assert.Equal(t, []int{0, 21, 11}, offsets)
 	require.Len(t, e.q.order, 110)
 	assert.True(t, slices.IsSorted(e.q.order))
@@ -298,7 +298,7 @@ func TestListener_BackfillFetchErrorEnqueuesNothing(t *testing.T) {
 		api.EXPECT().MessagesGetHistory(gomock.Any(), gomock.Any()).Return(page(seq(21, 120)...), nil),
 		api.EXPECT().MessagesGetHistory(gomock.Any(), gomock.Any()).Return(nil, errors.New("rpc down")),
 	)
-	require.Error(t, e.l.Backfill(t.Context(), 5, 10))
+	require.Error(t, e.l.Backfill(t.Context(), -1000000000005, 10, 0))
 	assert.Empty(t, e.q.keys)
 }
 
@@ -312,7 +312,7 @@ func TestListener_BackfillTruncated(t *testing.T) {
 			next--
 			return page(next), nil
 		})
-	require.NoError(t, e.l.Backfill(t.Context(), 5, 10))
+	require.NoError(t, e.l.Backfill(t.Context(), -1000000000005, 10, 0))
 	assert.Len(t, e.q.keys, 1000)
 	assert.Contains(t, e.buf.String(), "backfill truncated")
 	assert.NotContains(t, e.buf.String(), "backfill done")
@@ -328,14 +328,14 @@ func TestListener_BackfillContextCancelled(t *testing.T) {
 			cancel()
 			return page(seq(21, 120)...), nil
 		})
-	require.ErrorIs(t, e.l.Backfill(ctx, 5, 10), context.Canceled)
+	require.ErrorIs(t, e.l.Backfill(ctx, -1000000000005, 10, 0), context.Canceled)
 	assert.Empty(t, e.q.keys)
 }
 
 func TestListener_BackfillNoHash(t *testing.T) {
 	e := setup(t, mocks.NewMockAPI(gomock.NewController(t)))
 	e.r.last, e.r.ok = 10, true
-	require.NoError(t, e.l.Backfill(t.Context(), 5, 10))
+	require.NoError(t, e.l.Backfill(t.Context(), -1000000000005, 10, 0))
 	assert.Empty(t, e.q.keys)
 	assert.Contains(t, e.buf.String(), "level=WARN")
 }
@@ -350,7 +350,7 @@ func TestListener_BackfillNoHistoryFetchesOnePage(t *testing.T) {
 			assert.Equal(t, 0, req.OffsetID)
 			return page(seq(1001, 1100)...), nil // a full page: more history exists
 		})
-	require.NoError(t, e.l.Backfill(t.Context(), 5, 0))
+	require.NoError(t, e.l.Backfill(t.Context(), -1000000000005, 0, 0))
 	require.Len(t, e.q.order, 100)
 	assert.True(t, slices.IsSorted(e.q.order))
 	out := e.buf.String()
@@ -366,7 +366,7 @@ func TestListener_BackfillEnqueueErrorFails(t *testing.T) {
 	e.q.err = errors.New("db down")
 	api.EXPECT().MessagesGetHistory(gomock.Any(), gomock.Any()).Return(page(12, 11), nil)
 	api.EXPECT().MessagesGetHistory(gomock.Any(), gomock.Any()).Return(page(), nil)
-	require.Error(t, e.l.Backfill(t.Context(), 5, 10))
+	require.Error(t, e.l.Backfill(t.Context(), -1000000000005, 10, 0))
 	assert.Len(t, e.q.keys, 1, "stops at the first failed enqueue")
 	assert.NotContains(t, e.buf.String(), "backfill done")
 }
@@ -379,7 +379,7 @@ func TestListener_BackfillFloodWaitIsReturned(t *testing.T) {
 	withHash(e)
 	sleeps := fakeSleep(e.l)
 	api.EXPECT().MessagesGetHistory(gomock.Any(), gomock.Any()).Return(nil, tgerr.New(420, "FLOOD_WAIT_3600"))
-	err := e.l.Backfill(t.Context(), 5, 10)
+	err := e.l.Backfill(t.Context(), -1000000000005, 10, 0)
 	d, ok := tgerr.AsFloodWait(err)
 	require.True(t, ok, "the worker needs the flood wait to schedule the retry")
 	assert.Equal(t, time.Hour, d)
@@ -408,7 +408,7 @@ func TestListener_BackfillPagePause(t *testing.T) {
 		api.EXPECT().MessagesGetHistory(gomock.Any(), gomock.Any()).Return(page(seq(11, 20)...), nil),
 		api.EXPECT().MessagesGetHistory(gomock.Any(), gomock.Any()).Return(page(), nil),
 	)
-	require.NoError(t, e.l.Backfill(t.Context(), 5, 10))
+	require.NoError(t, e.l.Backfill(t.Context(), -1000000000005, 10, 0))
 	assert.Equal(t, []time.Duration{time.Second, time.Second}, *sleeps)
 	require.Len(t, e.q.order, 110)
 }
@@ -435,7 +435,7 @@ func TestListener_BackfillFloodWaitRetriesSamePage(t *testing.T) {
 			}
 			return page(), nil
 		})
-	require.NoError(t, e.l.Backfill(t.Context(), 5, 10))
+	require.NoError(t, e.l.Backfill(t.Context(), -1000000000005, 10, 0))
 	assert.Equal(t, []int{0, 21, 21, 11}, offsets)
 	assert.Equal(t, []time.Duration{4 * time.Second}, *sleeps)
 	require.Len(t, e.q.order, 110)
@@ -453,7 +453,7 @@ func TestListener_BackfillFloodWaitCumulativeCap(t *testing.T) {
 	withHash(e)
 	sleeps := fakeSleep(e.l)
 	api.EXPECT().MessagesGetHistory(gomock.Any(), gomock.Any()).Times(2).Return(nil, tgerr.New(420, "FLOOD_WAIT_1000"))
-	err := e.l.Backfill(t.Context(), 5, 10)
+	err := e.l.Backfill(t.Context(), -1000000000005, 10, 0)
 	d, ok := tgerr.AsFloodWait(err)
 	require.True(t, ok)
 	assert.Equal(t, 1000*time.Second, d)
@@ -471,7 +471,7 @@ func TestListener_BackfillFloodWaitRespectsDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	api.EXPECT().MessagesGetHistory(gomock.Any(), gomock.Any()).Times(1).Return(nil, tgerr.New(420, "FLOOD_WAIT_120"))
-	_, ok := tgerr.AsFloodWait(e.l.Backfill(ctx, 5, 10))
+	_, ok := tgerr.AsFloodWait(e.l.Backfill(ctx, -1000000000005, 10, 0))
 	require.True(t, ok)
 	assert.Empty(t, *sleeps)
 }
@@ -488,7 +488,7 @@ func TestListener_BackfillFloodWaitInterruptedByShutdown(t *testing.T) {
 			return nil, tgerr.New(420, "FLOOD_WAIT_600")
 		})
 	start := time.Now()
-	require.ErrorIs(t, e.l.Backfill(ctx, 5, 10), context.Canceled)
+	require.ErrorIs(t, e.l.Backfill(ctx, -1000000000005, 10, 0), context.Canceled)
 	assert.Less(t, time.Since(start), 5*time.Second)
 	assert.Empty(t, e.q.keys)
 }
@@ -499,13 +499,13 @@ func TestListener_OnChannelTooLongEnqueuesBackfillJob(t *testing.T) {
 	withHash(e)
 	e.l.Start(t.Context())
 	e.l.OnChannelTooLong(5)
-	assert.Equal(t, []string{"5"}, e.q.bfKeys)
-	assert.Equal(t, []jobs.BackfillChannel{{ChannelID: 5, MinID: 10}}, e.q.bf)
+	assert.Equal(t, []string{"-1000000000005"}, e.q.bfKeys)
+	assert.Equal(t, []jobs.BackfillHistory{{ChatID: -1000000000005, MinID: 10}}, e.q.bf)
 	assert.Equal(t, jobs.BackfillMinIDField, e.q.bfField)
 	assert.Empty(t, e.q.keys)
 	out := e.buf.String()
 	assert.Contains(t, out, `level=WARN msg="channel too long" component=telegram chat_id=-1000000000005`)
-	assert.Contains(t, out, `msg="job enqueued" component=queue job_id=7 job_kind=backfill_channel version=1 inserted=true`)
+	assert.Contains(t, out, `msg="job enqueued" component=queue job_id=7 job_kind=backfill_history version=1 inserted=true`)
 }
 
 func TestListener_OnChannelTooLongDuringShutdown(t *testing.T) {
@@ -515,14 +515,14 @@ func TestListener_OnChannelTooLongDuringShutdown(t *testing.T) {
 	e.l.Start(ctx)
 	cancel() // workers are stopping, Telegram is still running
 	e.l.OnChannelTooLong(5)
-	assert.Equal(t, []jobs.BackfillChannel{{ChannelID: 5, MinID: 10}}, e.q.bf)
+	assert.Equal(t, []jobs.BackfillHistory{{ChatID: -1000000000005, MinID: 10}}, e.q.bf)
 }
 
 func TestListener_OnChannelTooLongNoHistory(t *testing.T) {
 	e := setup(t, nil)
 	e.l.Start(t.Context())
 	e.l.OnChannelTooLong(5)
-	assert.Equal(t, []jobs.BackfillChannel{{ChannelID: 5, MinID: 0}}, e.q.bf)
+	assert.Equal(t, []jobs.BackfillHistory{{ChatID: -1000000000005, MinID: 0}}, e.q.bf)
 }
 
 func TestListener_OnChannelTooLongErrors(t *testing.T) {

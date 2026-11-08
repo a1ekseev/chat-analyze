@@ -18,15 +18,15 @@ import (
 )
 
 type fakeBackfiller struct {
-	calls  []jobs.BackfillChannel
+	calls  []jobs.BackfillHistory
 	err    error
 	pan    bool
 	ctxErr error
 	hook   func(ctx context.Context)
 }
 
-func (f *fakeBackfiller) Backfill(ctx context.Context, channelID int64, minID int) error {
-	f.calls = append(f.calls, jobs.BackfillChannel{ChannelID: channelID, MinID: minID})
+func (f *fakeBackfiller) Backfill(ctx context.Context, chatID int64, minID, maxPages int) error {
+	f.calls = append(f.calls, jobs.BackfillHistory{ChatID: chatID, MinID: minID, MaxPages: maxPages})
 	if f.hook != nil {
 		f.hook(ctx)
 	}
@@ -42,25 +42,25 @@ func (f *fakeBackfiller) Backfill(ctx context.Context, channelID int64, minID in
 
 func bfPayload(t *testing.T) json.RawMessage {
 	t.Helper()
-	raw, err := json.Marshal(jobs.BackfillChannel{ChannelID: 5, MinID: 10})
+	raw, err := json.Marshal(jobs.BackfillHistory{ChatID: -1000000000005, MinID: 10, MaxPages: 3})
 	require.NoError(t, err)
 	return raw
 }
 
-func newBackfillWorker(q worker.Queue, b worker.Backfiller, buf *bytes.Buffer) *worker.BackfillWorker {
+func newBackfillWorker(q worker.Queue, b worker.Backfiller, buf *bytes.Buffer) *worker.LongWorker {
 	l := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	return worker.NewBackfill(q, b, worker.Config{Lease: time.Minute, PollInterval: 10 * time.Millisecond}, l)
 }
 
 func TestBackfillWorker_Success(t *testing.T) {
-	q := &fakeQueue{has: true, job: queue.Job{ID: 1, Kind: jobs.KindBackfillChannel, Attempts: 1, Payload: bfPayload(t)}}
+	q := &fakeQueue{has: true, job: queue.Job{ID: 1, Kind: jobs.KindBackfillHistory, Attempts: 1, Payload: bfPayload(t)}}
 	b := &fakeBackfiller{}
 	did, err := newBackfillWorker(q, b, &bytes.Buffer{}).RunOnce(t.Context())
 	require.NoError(t, err)
 	require.True(t, did)
-	require.Equal(t, jobs.KindBackfillChannel, q.kind)
+	require.Equal(t, jobs.KindBackfillHistory, q.kind)
 	require.Equal(t, worker.BackfillLease, q.lease, "a long history fetch must not outlive its lease")
-	require.Equal(t, []jobs.BackfillChannel{{ChannelID: 5, MinID: 10}}, b.calls)
+	require.Equal(t, []jobs.BackfillHistory{{ChatID: -1000000000005, MinID: 10, MaxPages: 3}}, b.calls)
 	require.True(t, q.completed)
 	require.False(t, q.failed)
 }
@@ -87,7 +87,7 @@ func TestBackfillWorker_ErrorBackoff(t *testing.T) {
 }
 
 func TestBackfillWorker_BadPayloadPermanent(t *testing.T) {
-	q := &fakeQueue{has: true, job: queue.Job{ID: 1, Attempts: 1, Payload: json.RawMessage(`{"channel_id":"CANARY"}`)}}
+	q := &fakeQueue{has: true, job: queue.Job{ID: 1, Attempts: 1, Payload: json.RawMessage(`{"chat_id":"CANARY"}`)}}
 	b := &fakeBackfiller{}
 	_, err := newBackfillWorker(q, b, &bytes.Buffer{}).RunOnce(t.Context())
 	require.NoError(t, err)
@@ -154,4 +154,35 @@ func TestBackfillWorker_RunStopsOnCancel(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Run did not stop")
 	}
+}
+
+type fakeSyncer struct {
+	calls int
+	err   error
+}
+
+func (f *fakeSyncer) SyncDialogs(context.Context) error { f.calls++; return f.err }
+
+func TestSyncWorker_RunsPass(t *testing.T) {
+	q := &fakeQueue{has: true, job: queue.Job{ID: 1, Attempts: 1, Payload: json.RawMessage(`{}`)}}
+	s := &fakeSyncer{}
+	w := worker.NewSync(q, s, worker.Config{Lease: time.Minute, PollInterval: time.Hour}, slog.New(slog.DiscardHandler))
+	did, err := w.RunOnce(t.Context())
+	require.NoError(t, err)
+	require.True(t, did)
+	require.Equal(t, jobs.KindSyncDialogs, q.kind)
+	require.Equal(t, worker.BackfillLease, q.lease)
+	require.Equal(t, 1, s.calls)
+	require.True(t, q.completed)
+}
+
+func TestSyncWorker_FloodWaitReleases(t *testing.T) {
+	q := &fakeQueue{has: true, job: queue.Job{ID: 1, Attempts: 1, MaxAttempts: 10, Payload: json.RawMessage(`{}`)}}
+	w := worker.NewSync(q, &fakeSyncer{err: tgerr.New(420, "FLOOD_WAIT_7")},
+		worker.Config{Lease: time.Minute, PollInterval: time.Hour}, slog.New(slog.DiscardHandler))
+	_, err := w.RunOnce(t.Context())
+	require.NoError(t, err)
+	require.True(t, q.released)
+	require.False(t, q.failed)
+	require.Equal(t, 8*time.Second, q.retryIn)
 }

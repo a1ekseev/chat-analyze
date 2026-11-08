@@ -1,6 +1,7 @@
 // Package worker processes queue jobs: save_message (store the message,
-// upsert forum topic titles, optionally mark it read in Telegram) and
-// backfill_channel (fetch a channel gap and enqueue its messages).
+// upsert forum topic titles, optionally mark it read in Telegram),
+// backfill_history (fetch a chat gap and enqueue its messages) and
+// sync_dialogs (bring every dialog in line with Telegram).
 package worker
 
 import (

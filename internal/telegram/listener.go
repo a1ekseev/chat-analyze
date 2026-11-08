@@ -54,7 +54,7 @@ type PeerStore interface {
 }
 
 // Listener turns Telegram updates into queued save_message jobs and channel
-// gaps into backfill_channel jobs.
+// gaps into backfill_history jobs.
 type Listener struct {
 	q     Enqueuer
 	repo  MessageRepo
@@ -236,7 +236,7 @@ func (l *Listener) jobEnqueued(ctx context.Context, kind string, res queue.Enque
 
 // OnChannelTooLong is called by gotd when a channel gap cannot be recovered
 // through updates (gotd has already moved the channel pts past it). It
-// enqueues a durable backfill_channel job with min_id = the last stored
+// enqueues a durable backfill_history job with min_id = the last stored
 // message id of the channel (0 when none), so FLOOD_WAIT, errors and restarts
 // are retried by the queue. Re-enqueueing a pending backfill keeps the
 // smaller non-zero min_id (queue.EnqueueKeepMin; 0 never wins over a real
@@ -256,41 +256,41 @@ func (l *Listener) OnChannelTooLong(channelID int64) {
 			slog.String("error", logx.SanitizeError(err)))
 		return
 	}
-	res, err := l.q.EnqueueKeepMin(ctx, jobs.KindBackfillChannel, jobs.BackfillDedupKey(channelID),
-		jobs.BackfillChannel{ChannelID: channelID, MinID: last}, jobs.BackfillMinIDField)
+	res, err := l.q.EnqueueKeepMin(ctx, jobs.KindBackfillHistory, jobs.BackfillDedupKey(chatID),
+		jobs.BackfillHistory{ChatID: chatID, MinID: last}, jobs.BackfillMinIDField)
 	if err != nil {
 		l.log.ErrorContext(ctx, "backfill enqueue failed", logx.ChatID(chatID),
 			slog.String("error", logx.SanitizeError(err)))
 		return
 	}
-	l.jobEnqueued(ctx, jobs.KindBackfillChannel, res)
+	l.jobEnqueued(ctx, jobs.KindBackfillHistory, res)
 }
 
-// Backfill fetches the channel messages newer than minID and enqueues them as
+// Backfill fetches the messages of any chat (marked id) newer than minID and enqueues them as
 // save_message jobs, oldest first, only after every page was fetched; pages
 // are backfillPagePause apart. It is
-// the handler of backfill_channel jobs: any error makes the queue retry the
+// the handler of backfill_history jobs: any error makes the queue retry the
 // whole job with the same minID. A FLOOD_WAIT_X is waited out in place (X+1s)
 // and the same page is fetched again, up to backfillFloodWaitCap of waiting
 // in total; past the cap the FLOOD_WAIT error is returned (see
 // tgerr.AsFloodWait) and the queue schedules the retry.
-// minID 0 (nothing of the channel stored) fetches only the latest page.
-func (l *Listener) Backfill(ctx context.Context, channelID int64, minID int) error {
+// minID 0 (nothing of the chat stored) fetches only the latest page;
+// maxPages > 0 lowers the 1000-page cap (dialog sync of unread messages).
+func (l *Listener) Backfill(ctx context.Context, chatID int64, minID, maxPages int) error {
 	started := time.Now()
-	chatID := channelChatID(channelID)
-	self := l.peers.Self()
-
-	peer, ok, err := l.peers.Get(ctx, self.ID, chatID)
+	input, ok, err := l.storedInputPeer(ctx, chatID)
 	if err != nil {
-		return wrapf(err, "backfill get peer %d", chatID)
+		return err
 	}
-	if !ok || peer.AccessHash == 0 {
+	if !ok {
 		l.log.WarnContext(ctx, "backfill skipped", slog.String("reason", "no_access_hash"), logx.ChatID(chatID))
 		return nil
 	}
-	input := &tg.InputPeerChannel{ChannelID: channelID, AccessHash: peer.AccessHash}
 
-	maxPages := backfillMaxPages
+	full := maxPages <= 0 || maxPages >= backfillMaxPages
+	if full {
+		maxPages = backfillMaxPages
+	}
 	if minID == 0 {
 		maxPages = 1
 		l.log.WarnContext(ctx, "backfill limited", slog.String("reason", "no_history"), logx.ChatID(chatID),
@@ -350,7 +350,7 @@ func (l *Listener) Backfill(ctx context.Context, channelID int64, minID int) err
 		logx.ChatID(chatID), slog.Int("from_message_id", minID), slog.Int("fetched", len(items)),
 		logx.Duration(time.Since(started)),
 	}
-	if truncated && minID != 0 {
+	if truncated && minID != 0 && full {
 		l.log.WarnContext(ctx, "backfill truncated", attrs...)
 		return nil
 	}

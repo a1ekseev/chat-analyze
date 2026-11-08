@@ -51,7 +51,7 @@ type env struct {
 	api  *mocks.MockAPI
 	d    tg.UpdateDispatcher
 	w    *worker.Worker
-	bw   *worker.BackfillWorker
+	bw   *worker.LongWorker
 	l    *telegram.Listener
 	r    *telegram.Reader
 	buf  *bytes.Buffer
@@ -371,13 +371,13 @@ func TestE2E_NoMessageDataInLogs(t *testing.T) {
 	require.NoError(t, rows.Err())
 }
 
-// backfillJob reads the backfill_channel job of channel 5.
-func (e *env) backfillJob(t *testing.T) (status string, payload jobs.BackfillChannel, runAt time.Time) {
+// backfillJob reads the backfill_history job of channel 5.
+func (e *env) backfillJob(t *testing.T) (status string, payload jobs.BackfillHistory, runAt time.Time) {
 	t.Helper()
 	var raw []byte
 	require.NoError(t, e.pool.QueryRow(e.ctx,
 		`SELECT status, payload, run_at FROM jobs WHERE kind = $1 AND dedup_key = $2`,
-		jobs.KindBackfillChannel, jobs.BackfillDedupKey(channelRaw)).Scan(&status, &raw, &runAt))
+		jobs.KindBackfillHistory, jobs.BackfillDedupKey(channelMark)).Scan(&status, &raw, &runAt))
 	require.NoError(t, json.Unmarshal(raw, &payload))
 	return status, payload, runAt
 }
@@ -404,7 +404,7 @@ func TestE2E_BackfillFloodWaitThenSuccess(t *testing.T) {
 	e.l.OnChannelTooLong(channelRaw)
 	status, p, _ := e.backfillJob(t)
 	require.Equal(t, "pending", status)
-	require.Equal(t, jobs.BackfillChannel{ChannelID: channelRaw, MinID: 10}, p)
+	require.Equal(t, jobs.BackfillHistory{ChatID: channelMark, MinID: 10}, p)
 
 	var minIDs []int
 	gomock.InOrder(
@@ -427,7 +427,7 @@ func TestE2E_BackfillFloodWaitThenSuccess(t *testing.T) {
 	status, _, runAt := e.backfillJob(t)
 	require.Equal(t, "pending", status)
 	require.WithinRange(t, runAt, before.Add(time.Hour), time.Now().Add(time.Hour+2*time.Second))
-	require.Equal(t, 1, e.count(t, `SELECT count(*) FROM jobs WHERE kind = 'backfill_channel' AND attempts = 0`),
+	require.Equal(t, 1, e.count(t, `SELECT count(*) FROM jobs WHERE kind = 'backfill_history' AND attempts = 0`),
 		"a FLOOD_WAIT does not count the attempt")
 
 	// A live message arrives and another TooLong fires while the job waits.
@@ -438,7 +438,7 @@ func TestE2E_BackfillFloodWaitThenSuccess(t *testing.T) {
 	require.Equal(t, 10, p.MinID, "min_id must not move past the gap")
 	require.True(t, runAt2.Equal(runAt), "re-enqueue keeps the flood wait")
 
-	_, err = e.pool.Exec(e.ctx, `UPDATE jobs SET run_at = now() WHERE kind = $1`, jobs.KindBackfillChannel)
+	_, err = e.pool.Exec(e.ctx, `UPDATE jobs SET run_at = now() WHERE kind = $1`, jobs.KindBackfillHistory)
 	require.NoError(t, err)
 	did, err = e.bw.RunOnce(e.ctx)
 	require.NoError(t, err)
@@ -463,7 +463,7 @@ func TestE2E_BackfillSurvivesRestart(t *testing.T) {
 	e.l.OnChannelTooLong(channelRaw)
 
 	// The process claims the job and dies.
-	_, ok, err := e.q.Claim(e.ctx, jobs.KindBackfillChannel, time.Minute)
+	_, ok, err := e.q.Claim(e.ctx, jobs.KindBackfillHistory, time.Minute)
 	require.NoError(t, err)
 	require.True(t, ok)
 	status, _, _ := e.backfillJob(t)
@@ -471,7 +471,7 @@ func TestE2E_BackfillSurvivesRestart(t *testing.T) {
 
 	// After the restart the lease expires and maintenance reaps it.
 	_, err = e.pool.Exec(e.ctx, `UPDATE jobs SET locked_until = now() - interval '1 second' WHERE kind = $1`,
-		jobs.KindBackfillChannel)
+		jobs.KindBackfillHistory)
 	require.NoError(t, err)
 	n, err := e.q.Reap(e.ctx)
 	require.NoError(t, err)
@@ -516,8 +516,9 @@ func TestE2E_BackfillShutdownReleasesJob(t *testing.T) {
 	status, p, _ := e.backfillJob(t)
 	require.Equal(t, "pending", status)
 	require.Equal(t, 10, p.MinID)
-	require.Equal(t, 1, e.count(t, `SELECT count(*) FROM jobs WHERE kind = 'backfill_channel'
+	require.Equal(t, 1, e.count(t, `SELECT count(*) FROM jobs WHERE kind = 'backfill_history'
 		AND attempts = 0 AND locked_until IS NULL AND run_at <= now()`))
 	require.Contains(t, e.buf.String(), `"msg":"job released"`)
 	require.Equal(t, 0, e.count(t, `SELECT count(*) FROM jobs WHERE kind = 'save_message' AND status = 'pending'`))
 }
+
