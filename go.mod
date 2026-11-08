@@ -8,7 +8,7 @@ require (
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/gotd/log v0.1.0
-	github.com/gotd/td v0.162.0
+	github.com/gotd/td v0.163.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/stretchr/testify v1.12.1
