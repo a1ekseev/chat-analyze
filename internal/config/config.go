@@ -33,6 +33,8 @@ type Config struct {
 	APIHash     Secret `env:"TG_API_HASH,required" validate:"required,len=32,hexadecimal"`
 	SessionName string `env:"TG_SESSION_NAME" envDefault:"default" validate:"required"`
 	Phone       Secret `env:"TG_PHONE"`
+	// RPS is the account-wide limit of Telegram RPCs per second.
+	RPS float64 `env:"TG_RPS" envDefault:"10" validate:"gt=0,lte=100"`
 
 	Workers          int           `env:"WORKERS" envDefault:"1" validate:"min=1,max=64"`
 	JobsMaxAttempts  int           `env:"JOBS_MAX_ATTEMPTS" envDefault:"10" validate:"min=1"`
@@ -109,6 +111,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("tg_api_hash", c.APIHash.String()),
 		slog.String("tg_session_name", c.SessionName),
 		slog.String("tg_phone", c.Phone.String()),
+		slog.Float64("tg_rps", c.RPS),
 		slog.Int("workers", c.Workers),
 		slog.Int("jobs_max_attempts", c.JobsMaxAttempts),
 		slog.Duration("jobs_lease", c.JobsLease),

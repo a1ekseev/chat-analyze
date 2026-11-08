@@ -30,6 +30,7 @@ func TestLoad_Defaults(t *testing.T) {
 	cfg, err := LoadFrom(validEnv())
 	require.NoError(t, err)
 	require.Equal(t, 1, cfg.Workers)
+	require.InDelta(t, 10.0, cfg.RPS, 0)
 	require.Equal(t, 10, cfg.JobsMaxAttempts)
 	require.Equal(t, 2*time.Minute, cfg.JobsLease)
 	require.Equal(t, time.Second, cfg.JobsPollInterval)
@@ -58,6 +59,9 @@ func TestLoad_Invalid(t *testing.T) {
 		{"api hash not hex", func(e map[string]string) { e["TG_API_HASH"] = strings.Repeat("z", 32) }, "TG_API_HASH"},
 		{"api id zero", func(e map[string]string) { e["TG_API_ID"] = "0" }, "TG_API_ID"},
 		{"workers zero", func(e map[string]string) { e["WORKERS"] = "0" }, "WORKERS"},
+		{"rps zero", func(e map[string]string) { e["TG_RPS"] = "0" }, "TG_RPS"},
+		{"rps too high", func(e map[string]string) { e["TG_RPS"] = "1000" }, "TG_RPS"},
+		{"rps not a number", func(e map[string]string) { e["TG_RPS"] = "fast" }, "TG_RPS"},
 		{"workers too many", func(e map[string]string) { e["WORKERS"] = "65" }, "WORKERS"},
 		{"log level", func(e map[string]string) { e["LOG_LEVEL"] = "verbose" }, "LOG_LEVEL"},
 		{"log format", func(e map[string]string) { e["LOG_FORMAT"] = "xml" }, "LOG_FORMAT"},

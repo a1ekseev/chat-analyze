@@ -72,6 +72,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		SessionName:      cfg.SessionName,
 		Logger:           logger,
 		GotdLogLevel:     gotdLevel,
+		RPS:              cfg.RPS,
 		Peers:            peerCache,
 		OnChannelTooLong: func(channelID int64) { listener.OnChannelTooLong(channelID) }, //nolint:contextcheck // listener uses its Start ctx
 	})

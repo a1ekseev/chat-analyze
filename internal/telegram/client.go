@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -29,6 +30,8 @@ type ClientConfig struct {
 	SessionName  string
 	Logger       *slog.Logger
 	GotdLogLevel slog.Level
+	// RPS is the account-wide RPC rate (RateLimiter); 0 means 10.
+	RPS float64
 	// Peers receives the current account once authorized (optional).
 	Peers *PeerCache
 	// OnChannelTooLong is called when updates.Manager cannot recover a
@@ -94,8 +97,11 @@ func NewClient(cfg ClientConfig) *Client {
 	c.raw = telegram.NewClient(cfg.APIID, cfg.APIHash, telegram.Options{
 		SessionStorage: c.session,
 		UpdateHandler:  outer,
-		Middlewares:    []telegram.Middleware{hook.AffectedHook(c.gaps)},
-		Logger:         gotdLogger,
+		Middlewares: []telegram.Middleware{
+			NewRateLimiter(cmp.Or(cfg.RPS, 10), cfg.Logger),
+			hook.AffectedHook(c.gaps),
+		},
+		Logger: gotdLogger,
 	})
 	c.pmgr = peers.Options{Storage: NewPeerKV(cfg.Pool), Logger: gotdLogger}.Build(c.raw.API())
 	inner.h = c.pmgr.UpdateHook(c.dispatcher)
