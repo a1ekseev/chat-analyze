@@ -26,7 +26,7 @@ type MessageStore interface {
 	UpsertTopic(ctx context.Context, chatID int64, topicID int, title string) error
 }
 
-// ReadMarker marks messages as read in Telegram.
+// ReadMarker records messages to be marked read in Telegram.
 type ReadMarker interface {
 	MarkRead(ctx context.Context, chatID int64, t jobs.ReadTarget, maxID int) error
 }

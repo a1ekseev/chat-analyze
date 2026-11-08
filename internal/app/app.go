@@ -103,6 +103,13 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		},
 		Stop: srv.Shutdown,
 	}
+	// Read marks are coalesced in the reader and sent every
+	// ReadFlushInterval; whatever is pending at shutdown is sent before
+	// Telegram stops (or dropped when that takes too long).
+	s.Background = append(s.Background, func(ctx context.Context) error {
+		return reader.Run(ctx, telegram.ReadFlushInterval)
+	})
+	s.Flush = func(ctx context.Context) { _ = reader.Flush(ctx) }
 	for range cfg.Workers {
 		w := worker.New(q, repo, reader, wcfg, logger)
 		s.Background = append(s.Background, func(ctx context.Context) error { return w.Run(ctx, notifier.C()) })

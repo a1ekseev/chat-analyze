@@ -54,7 +54,7 @@ func TestRunStages_ShutdownOrder(t *testing.T) {
 	ev := &events{}
 	h := newFakeHTTP(ev)
 	tgAlive := make(chan struct{})
-	var workerSawLiveTelegram bool
+	var workerSawLiveTelegram, flushSawLiveTelegram bool
 	startCtx := make(chan context.Context, 1)
 	s := stages{
 		Start: func(ctx context.Context) { startCtx <- ctx },
@@ -71,6 +71,15 @@ func TestRunStages_ShutdownOrder(t *testing.T) {
 				ev.add("worker done")
 				return nil
 			},
+		},
+		Flush: func(ctx context.Context) {
+			_, hasDeadline := ctx.Deadline()
+			select {
+			case <-tgAlive:
+			default:
+				flushSawLiveTelegram = hasDeadline && ctx.Err() == nil
+			}
+			ev.add("flush")
 		},
 		Telegram: func(ctx context.Context) error {
 			<-ctx.Done()
@@ -96,7 +105,8 @@ func TestRunStages_ShutdownOrder(t *testing.T) {
 	}
 	require.Error(t, (<-startCtx).Err(), "Start gets the Background ctx, cancelled by now")
 	assert.True(t, workerSawLiveTelegram, "telegram must outlive the workers")
-	assert.Equal(t, []string{"worker done", "telegram done", "http stopped"}, ev.list())
+	assert.True(t, flushSawLiveTelegram, "read marks are flushed, bounded, before telegram stops")
+	assert.Equal(t, []string{"worker done", "flush", "telegram done", "http stopped"}, ev.list())
 	assert.Contains(t, logs.String(), `"msg":"shutdown started"`)
 	assert.Contains(t, logs.String(), `"msg":"shutdown complete"`)
 	assert.Contains(t, logs.String(), `"reason":"signal"`)

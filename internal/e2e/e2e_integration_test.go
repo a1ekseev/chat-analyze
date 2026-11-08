@@ -53,6 +53,7 @@ type env struct {
 	w    *worker.Worker
 	bw   *worker.BackfillWorker
 	l    *telegram.Listener
+	r    *telegram.Reader
 	buf  *bytes.Buffer
 }
 
@@ -80,6 +81,7 @@ func newEnv(t *testing.T, wrap func(worker.MessageStore, *pgxpool.Pool) worker.M
 	}
 	reader := telegram.NewReader(api, telegram.NewReadMarks(pool), logger)
 	wcfg := worker.Config{MarkRead: true, Lease: time.Minute, PollInterval: 10 * time.Millisecond}
+	e.r = reader
 	e.w = worker.New(q, store, reader, wcfg, logger)
 	e.bw = worker.NewBackfill(q, listener, wcfg, logger)
 	return e
@@ -92,13 +94,15 @@ func (e *env) deliver(t *testing.T, u tg.UpdateClass, users []tg.UserClass, chat
 	}))
 }
 
-// drain runs the worker until no due job is left.
+// drain runs the worker until no due job is left, then flushes the read
+// marks once (a failed flush is logged by the reader and checked by tests).
 func (e *env) drain(t *testing.T) {
 	t.Helper()
 	for range 20 {
 		did, err := e.w.RunOnce(e.ctx)
 		require.NoError(t, err)
 		if !did {
+			_ = e.r.Flush(e.ctx)
 			return
 		}
 	}
@@ -233,18 +237,16 @@ func TestE2E_FloodWait(t *testing.T) {
 	e.api.EXPECT().MessagesReadDiscussion(gomock.Any(), gomock.Any()).Return(true, nil).Times(1)
 
 	e.deliver(t, newChannelMsg(topicMsg(10, "flood")), senderUser("Ann"), []tg.ChatClass{forumChannel("Forum")})
-	before := time.Now()
 	e.drain(t)
 
+	// The job never waits for Telegram: the mark stays pending in the reader.
 	require.Equal(t, 1, e.count(t, `SELECT count(*) FROM messages WHERE message_id=10`))
-	j := e.jobFor(t, channelMark, 10)
-	require.Equal(t, "pending", j.Status)
-	require.WithinRange(t, j.RunAt, before.Add(5*time.Second), time.Now().Add(7*time.Second))
-
-	_, err := e.pool.Exec(e.ctx, `UPDATE jobs SET run_at = now()`)
-	require.NoError(t, err)
-	e.drain(t)
 	require.Equal(t, "done", e.jobFor(t, channelMark, 10).Status)
+	require.Equal(t, 0, e.count(t, `SELECT count(*) FROM tg_read_marks`))
+	require.Contains(t, e.buf.String(), `"msg":"flood wait"`)
+
+	require.NoError(t, e.r.Flush(e.ctx))
+	require.Equal(t, 2, e.count(t, `SELECT count(*) FROM tg_read_marks`)) // chat + thread
 }
 
 func TestE2E_EditDuringProcessing(t *testing.T) {
@@ -307,7 +309,7 @@ func TestE2E_NoMessageDataInLogs(t *testing.T) {
 	floodSeen := false
 	e.api.EXPECT().ChannelsReadHistory(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, req *tg.ChannelsReadHistoryRequest) (bool, error) {
-			if req.MaxID == floodID && !floodSeen {
+			if req.MaxID >= floodID && !floodSeen {
 				floodSeen = true
 				return false, tgerr.New(420, "FLOOD_WAIT_5")
 			}
@@ -336,7 +338,7 @@ func TestE2E_NoMessageDataInLogs(t *testing.T) {
 	// Sanity: all three failure/success paths really happened.
 	require.Equal(t, "done", e.jobFor(t, channelMark, okID).Status)
 	require.Equal(t, "pending", e.jobFor(t, channelMark, badID).Status)
-	require.Equal(t, "pending", e.jobFor(t, channelMark, floodID).Status)
+	require.Equal(t, "done", e.jobFor(t, channelMark, floodID).Status) // flood hits the reader, not the job
 	require.Equal(t, 1, e.count(t, `SELECT count(*) FROM messages WHERE message_id = $1`, floodID))
 	require.Equal(t, 0, e.count(t, `SELECT count(*) FROM messages WHERE message_id = $1`, badID))
 	var badErr string

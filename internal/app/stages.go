@@ -22,6 +22,9 @@ type stages struct {
 	// Background (workers, queue notifier, maintenance) stops first: their
 	// ctx is cancelled on shutdown; workers finish the in-flight job.
 	Background []func(ctx context.Context) error
+	// Flush (optional) runs after Background returned and before Telegram
+	// is cancelled (pending read marks), bounded by half the timeout.
+	Flush func(ctx context.Context)
 	// Telegram is cancelled only after all Background functions returned, so
 	// an in-flight job can still mark messages read.
 	Telegram func(ctx context.Context) error
@@ -85,6 +88,11 @@ func runStages(ctx context.Context, s stages, timeout time.Duration, log *slog.L
 	drained := make(chan error, 1)
 	go func() {
 		bg.Wait()
+		if s.Flush != nil {
+			fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout/2)
+			s.Flush(fctx)
+			cancel()
+		}
 		cancelTG()
 		<-tgDone
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
