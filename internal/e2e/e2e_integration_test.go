@@ -425,6 +425,8 @@ func TestE2E_BackfillFloodWaitThenSuccess(t *testing.T) {
 	status, _, runAt := e.backfillJob(t)
 	require.Equal(t, "pending", status)
 	require.WithinRange(t, runAt, before.Add(time.Hour), time.Now().Add(time.Hour+2*time.Second))
+	require.Equal(t, 1, e.count(t, `SELECT count(*) FROM jobs WHERE kind = 'backfill_channel' AND attempts = 0`),
+		"a FLOOD_WAIT does not count the attempt")
 
 	// A live message arrives and another TooLong fires while the job waits.
 	e.deliver(t, newChannelMsg(topicMsg(30, "live")), senderUser("Ann"), chats)

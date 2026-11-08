@@ -63,7 +63,8 @@ func (w *BackfillWorker) handle(ctx context.Context, job queue.Job, p jobs.Backf
 // shutdown (ctx): the job is then released (queue.Release, the attempt is
 // not counted) with a live context and runs again after the restart with the
 // same min_id, so nothing is lost. Errors, lease timeouts and FLOOD_WAITs
-// longer than the in-job cap follow the save_message retry rules.
+// longer than the in-job cap follow the save_message retry rules (a
+// FLOOD_WAIT does not count the attempt).
 func (w *BackfillWorker) RunOnce(ctx context.Context) (bool, error) {
 	job, ok, err := w.q.Claim(ctx, jobs.KindBackfillChannel, w.lease)
 	if err != nil {
@@ -95,7 +96,7 @@ func (w *BackfillWorker) RunOnce(ctx context.Context) (bool, error) {
 	jctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
 	defer cancel()
 	if shutdown {
-		return true, releaseJob(jctx, w.q, w.log, job)
+		return true, releaseJob(jctx, w.q, w.log, job, 0)
 	}
 	if herr != nil {
 		return true, failJob(jctx, w.q, w.log, job, herr, chatID)

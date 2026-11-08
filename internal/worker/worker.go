@@ -36,7 +36,7 @@ type Queue interface {
 	Claim(ctx context.Context, kind string, lease time.Duration) (queue.Job, bool, error)
 	Complete(ctx context.Context, id int64, version int) (bool, error)
 	Fail(ctx context.Context, job queue.Job, retryIn time.Duration, cause error) (bool, error)
-	Release(ctx context.Context, id int64, version int) (bool, error)
+	Release(ctx context.Context, id int64, version int, delay time.Duration) (bool, error)
 }
 
 // finishTimeout bounds Complete/Fail after Handle returned.
@@ -131,7 +131,7 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	}
 
 	if shutdown {
-		return true, releaseJob(jctx, w.q, w.log, job)
+		return true, releaseJob(jctx, w.q, w.log, job, 0)
 	}
 	var chatID *int64
 	var p jobs.SaveMessage
@@ -149,10 +149,10 @@ func interruptedByShutdown(parent, hctx context.Context) bool {
 	return parent.Err() != nil && !errors.Is(hctx.Err(), context.DeadlineExceeded)
 }
 
-// releaseJob returns a job interrupted by shutdown to the queue without
-// burning the attempt.
-func releaseJob(ctx context.Context, q Queue, log *slog.Logger, job queue.Job) error {
-	ok, err := q.Release(ctx, job.ID, job.Version)
+// releaseJob returns a job interrupted by shutdown (delay 0) or by a
+// FLOOD_WAIT to the queue without burning the attempt.
+func releaseJob(ctx context.Context, q Queue, log *slog.Logger, job queue.Job, delay time.Duration) error {
+	ok, err := q.Release(ctx, job.ID, job.Version, delay)
 	if err != nil {
 		return fmt.Errorf("release job %d: %w", job.ID, err)
 	}
@@ -161,22 +161,24 @@ func releaseJob(ctx context.Context, q Queue, log *slog.Logger, job queue.Job) e
 		return nil
 	}
 	log.DebugContext(ctx, "job released", logx.JobID(job.ID), slog.String("job_kind", job.Kind),
-		logx.Attempt(job.Attempts))
+		logx.Attempt(job.Attempts), slog.Int64("retry_in_ms", delay.Milliseconds()))
 	return nil
 }
 
-// failJob records a failed attempt: FLOOD_WAIT_X retries after X+1s, other
-// errors after queue.Backoff. chatID (optional) is logged with flood waits.
+// failJob records a failed attempt retried after queue.Backoff. A
+// FLOOD_WAIT_X is not the job's fault: the job is released and runs again
+// after X+1s without counting the attempt. chatID (optional) is logged with
+// flood waits.
 func failJob(ctx context.Context, q Queue, log *slog.Logger, job queue.Job, herr error, chatID *int64) error {
 	retryIn := queue.Backoff(job.Attempts)
 	if d, isFlood := tgerr.AsFloodWait(herr); isFlood {
-		retryIn = d + time.Second
 		attrs := []slog.Attr{logx.JobID(job.ID)}
 		if chatID != nil {
 			attrs = append(attrs, logx.ChatID(*chatID))
 		}
 		attrs = append(attrs, slog.Int64("wait_s", int64(d/time.Second)))
 		log.LogAttrs(ctx, slog.LevelWarn, "flood wait", attrs...)
+		return releaseJob(ctx, q, log, job, d+time.Second)
 	}
 	dead, ferr := q.Fail(ctx, job, retryIn, herr)
 	if ferr != nil {

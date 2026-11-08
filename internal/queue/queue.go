@@ -184,14 +184,15 @@ func (q *Queue) Fail(ctx context.Context, job Job, retryIn time.Duration, cause 
 
 const releaseSQL = `
 UPDATE jobs SET status = 'pending', attempts = GREATEST(attempts - 1, 0), locked_until = NULL,
-       run_at = now(), updated_at = now()
+       run_at = now() + $3::interval, updated_at = now()
 WHERE id = $1 AND version = $2 AND status = 'running'`
 
-// Release returns a running job to pending without counting the attempt; it
-// is used when the handler was interrupted by shutdown. false means the job
-// was superseded or is no longer running and nothing was changed.
-func (q *Queue) Release(ctx context.Context, id int64, version int) (bool, error) {
-	tag, err := q.pool.Exec(ctx, releaseSQL, id, version)
+// Release returns a running job to pending without counting the attempt, due
+// after delay; it is used when the handler was interrupted by shutdown
+// (delay 0) or hit a FLOOD_WAIT. false means the job was superseded or is no
+// longer running and nothing was changed.
+func (q *Queue) Release(ctx context.Context, id int64, version int, delay time.Duration) (bool, error) {
+	tag, err := q.pool.Exec(ctx, releaseSQL, id, version, delay)
 	if err != nil {
 		return false, fmt.Errorf("release job %d: %w", id, err)
 	}

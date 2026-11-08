@@ -72,10 +72,11 @@ func TestBackfillWorker_FloodWaitRetry(t *testing.T) {
 	did, err := newBackfillWorker(q, b, &buf).RunOnce(t.Context())
 	require.NoError(t, err)
 	require.True(t, did)
-	require.True(t, q.failed)
+	require.False(t, q.failed, "a FLOOD_WAIT must not count the attempt")
+	require.True(t, q.released)
 	require.Equal(t, 4*time.Second, q.retryIn)
 	require.Contains(t, buf.String(), `"msg":"flood wait","component":"worker","job_id":1,"chat_id":-1000000000005,"wait_s":3`)
-	require.Contains(t, buf.String(), `"msg":"job failed, will retry"`)
+	require.Contains(t, buf.String(), `"msg":"job released"`)
 }
 
 func TestBackfillWorker_ErrorBackoff(t *testing.T) {

@@ -234,12 +234,12 @@ func TestRelease_RestoresAttempt(t *testing.T) {
 	require.Equal(t, 1, job.Attempts)
 
 	// Version guard: a stale version changes nothing.
-	ok, err = q.Release(ctx, job.ID, job.Version+1)
+	ok, err = q.Release(ctx, job.ID, job.Version+1, 0)
 	require.NoError(t, err)
 	require.False(t, ok)
 	require.Equal(t, "running", getRow(t, pool, r.ID).Status)
 
-	ok, err = q.Release(ctx, job.ID, job.Version)
+	ok, err = q.Release(ctx, job.ID, job.Version, 0)
 	require.NoError(t, err)
 	require.True(t, ok)
 	got := getRow(t, pool, r.ID)
@@ -253,7 +253,7 @@ func TestRelease_RestoresAttempt(t *testing.T) {
 	require.True(t, due)
 
 	// Not running any more: nothing to release.
-	ok, err = q.Release(ctx, job.ID, job.Version)
+	ok, err = q.Release(ctx, job.ID, job.Version, 0)
 	require.NoError(t, err)
 	require.False(t, ok)
 
@@ -262,6 +262,33 @@ func TestRelease_RestoresAttempt(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, 1, job2.Attempts)
+}
+
+// Release with a delay (FLOOD_WAIT) keeps the attempt and defers the job,
+// even at the last attempt.
+func TestRelease_DelayKeepsAttempt(t *testing.T) {
+	ctx := context.Background()
+	pool := pgtest.New(t)
+	q := queue.New(pool, 1)
+	r, err := q.Enqueue(ctx, "analyze", "k1", 1)
+	require.NoError(t, err)
+	job, ok, err := q.Claim(ctx, "analyze", time.Hour)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, job.MaxAttempts, job.Attempts)
+
+	ok, err = q.Release(ctx, job.ID, job.Version, time.Hour)
+	require.NoError(t, err)
+	require.True(t, ok)
+	got := getRow(t, pool, r.ID)
+	require.Equal(t, "pending", got.Status)
+	require.Equal(t, 0, got.Attempts)
+	var wait time.Duration
+	require.NoError(t, pool.QueryRow(ctx, `SELECT run_at - now() FROM jobs WHERE id = $1`, r.ID).Scan(&wait))
+	require.InDelta(t, time.Hour.Seconds(), wait.Seconds(), 5)
+	_, ok, err = q.Claim(ctx, "analyze", time.Hour)
+	require.NoError(t, err)
+	require.False(t, ok, "not due before the delay")
 }
 
 func TestReap_ReturnsExpiredRunning(t *testing.T) {
@@ -364,7 +391,7 @@ func TestReap_StaleWorkerCannotFinish(t *testing.T) {
 	dead, err := q.Fail(ctx, stale, 0, queue.ErrPermanent)
 	require.NoError(t, err)
 	require.False(t, dead)
-	ok, err = q.Release(ctx, stale.ID, stale.Version)
+	ok, err = q.Release(ctx, stale.ID, stale.Version, 0)
 	require.NoError(t, err)
 	require.False(t, ok)
 	require.Equal(t, before, getRow(t, pool, r.ID))

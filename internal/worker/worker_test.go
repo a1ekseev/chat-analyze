@@ -101,8 +101,8 @@ func (q *fakeQueue) Fail(_ context.Context, _ queue.Job, retryIn time.Duration, 
 	return q.dead, nil
 }
 
-func (q *fakeQueue) Release(context.Context, int64, int) (bool, error) {
-	q.released = true
+func (q *fakeQueue) Release(_ context.Context, _ int64, _ int, delay time.Duration) (bool, error) {
+	q.released, q.retryIn = true, delay
 	return true, nil
 }
 
@@ -172,10 +172,11 @@ func TestRunOnce_FloodWaitRetryIn(t *testing.T) {
 	did, err := w.RunOnce(t.Context())
 	require.NoError(t, err)
 	require.True(t, did)
-	require.True(t, q.failed)
+	require.False(t, q.failed, "a FLOOD_WAIT must not count the attempt")
+	require.True(t, q.released)
 	require.Equal(t, 6*time.Second, q.retryIn)
 	require.Contains(t, buf.String(), `"msg":"flood wait"`)
-	require.Contains(t, buf.String(), `"msg":"job failed, will retry"`)
+	require.Contains(t, buf.String(), `"msg":"job released"`)
 }
 
 func TestRunOnce_BackoffOnError(t *testing.T) {
@@ -277,7 +278,7 @@ func (q *hookQueue) Fail(ctx context.Context, _ queue.Job, _ time.Duration, caus
 	return false, nil
 }
 
-func (q *hookQueue) Release(ctx context.Context, _ int64, _ int) (bool, error) {
+func (q *hookQueue) Release(ctx context.Context, _ int64, _ int, _ time.Duration) (bool, error) {
 	q.releases <- ctx.Err()
 	return true, nil
 }
